@@ -9,3 +9,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 coverage/
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
