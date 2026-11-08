@@ -11,7 +11,8 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 from database import DATABASE_URL, engine  # noqa: E402
-import models  # noqa: E402,F401 - imports all model declarations for metadata
+import models 
+import ledger_models # noqa: E402,F401 - imports all model declarations for metadata
 from models import Base  # noqa: E402
 
 
