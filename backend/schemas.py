@@ -1,8 +1,9 @@
 import re
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CustomerCreate(BaseModel):
@@ -56,3 +57,54 @@ class CustomerResponse(BaseModel):
     full_name: str
     email: str
     account: AccountResponse
+
+
+class FundingRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    account_id: UUID
+    amount: Decimal = Field(gt=Decimal("0"), max_digits=18, decimal_places=2)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class TransferRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    sender_account_id: UUID
+    receiver_account_id: UUID
+    amount: Decimal = Field(gt=Decimal("0"), max_digits=18, decimal_places=2)
+    description: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def accounts_must_differ(self) -> "TransferRequest":
+        if self.sender_account_id == self.receiver_account_id:
+            raise ValueError("Sender and receiver accounts must be different.")
+        return self
+
+
+class LedgerEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    ledger_account_id: UUID
+    entry_type: str
+    amount: Decimal
+    currency: str
+    created_at: datetime
+
+
+class TransactionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    sender_account_id: UUID | None
+    receiver_account_id: UUID
+    transaction_type: str
+    amount: Decimal
+    currency: str
+    status: str
+    idempotency_key: str
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+    ledger_entries: list[LedgerEntryResponse]

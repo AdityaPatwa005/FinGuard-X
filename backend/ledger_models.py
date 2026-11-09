@@ -34,12 +34,14 @@ class LedgerAccount(Base):
             "bank_account_id",
             unique=True,
             postgresql_where=text("bank_account_id IS NOT NULL"),
+            sqlite_where=text("bank_account_id IS NOT NULL"),
         ),
         Index(
             "uq_ledger_accounts_single_funding_pool",
             "account_type",
             unique=True,
             postgresql_where=text("account_type = 'FUNDING_POOL'"),
+            sqlite_where=text("account_type = 'FUNDING_POOL'"),
         ),
     )
 
