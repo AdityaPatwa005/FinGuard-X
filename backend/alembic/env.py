@@ -14,6 +14,7 @@ from database import DATABASE_URL, engine  # noqa: E402
 import models 
 import ledger_models # noqa: E402,F401 - imports all model declarations for metadata
 import transaction_models # noqa: E402,F401 - registers transaction and ledger-entry tables
+import outbox_models # noqa: E402,F401 - registers the transactional outbox table
 from models import Base  # noqa: E402
 
 

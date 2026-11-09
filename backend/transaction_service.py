@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ledger_models import LedgerAccount
 from models import Account
+from outbox_events import add_transaction_completed_event
 from schemas import TransactionResponse
 from transaction_models import LedgerEntry, Transaction
 
@@ -195,6 +196,10 @@ def _execute_transaction(
             transaction.status = "COMPLETED"
             db.flush()
             db.refresh(transaction)
+            # The outbox insert is part of this transaction: either both the
+            # financial operation and its event commit, or neither does.
+            add_transaction_completed_event(db, transaction)
+            db.flush()
             response = TransactionResponse.model_validate(transaction)
             return TransactionResult(transaction=response, replayed=False)
 
