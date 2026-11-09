@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import case, distinct, func, or_, select
+from sqlalchemy import and_, case, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from transaction_models import Transaction
@@ -53,6 +53,8 @@ class TransactionVelocityFeatures:
     prior_5_minute_count: int
     prior_1_hour_count: int
     prior_24_hour_count: int
+    prior_outgoing_transfer_5_minute_count: int | None
+    prior_outgoing_transfer_1_hour_count: int | None
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,7 @@ class BeneficiaryBehaviorFeatures:
 
     applicable: bool
     previously_received_from_sender: bool | None
+    receiver_seen_in_prior_24_hours: bool | None
     distinct_receivers_in_prior_24_hours: int | None
 
 
@@ -178,7 +181,7 @@ def extract_transaction_features(
             velocity=velocity,
             outgoing_volume=OutgoingVolumeFeatures(None, None),
             customer_behavior=CustomerBehaviorFeatures(False, None, None, None, None),
-            beneficiary_behavior=BeneficiaryBehaviorFeatures(False, None, None),
+            beneficiary_behavior=BeneficiaryBehaviorFeatures(False, None, None, None),
             temporal=temporal,
             data_quality=FeatureDataQuality(
                 prior_account_activity_in_24_hours=velocity.prior_24_hour_count > 0,
@@ -204,7 +207,8 @@ def extract_transaction_features(
     outgoing_1h = historical[2]
     outgoing_24h = historical[3]
     previous_receiver_count = historical[4]
-    distinct_receiver_count = historical[5]
+    receiver_seen_24h_count = historical[5]
+    distinct_receiver_count = historical[6]
 
     average = total_amount / count if count else None
     median = _historical_median(db, sender_id, transaction.created_at, count)
@@ -225,6 +229,7 @@ def extract_transaction_features(
         beneficiary_behavior=BeneficiaryBehaviorFeatures(
             applicable=True,
             previously_received_from_sender=previous_receiver_count > 0,
+            receiver_seen_in_prior_24_hours=receiver_seen_24h_count > 0,
             distinct_receivers_in_prior_24_hours=distinct_receiver_count,
         ),
         temporal=temporal,
@@ -251,6 +256,38 @@ def _velocity_features(
             0,
         ),
         func.count(Transaction.id),
+        func.coalesce(
+            func.sum(
+                case(
+                    (
+                        and_(
+                            Transaction.transaction_type == "TRANSFER",
+                            Transaction.sender_account_id == account_id,
+                            Transaction.created_at >= as_of - timedelta(minutes=5),
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        ),
+        func.coalesce(
+            func.sum(
+                case(
+                    (
+                        and_(
+                            Transaction.transaction_type == "TRANSFER",
+                            Transaction.sender_account_id == account_id,
+                            Transaction.created_at >= as_of - timedelta(hours=1),
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        ),
     ).where(
         Transaction.status == "COMPLETED",
         Transaction.created_at >= lower_24h,
@@ -267,6 +304,12 @@ def _velocity_features(
         prior_5_minute_count=int(counts[0] or 0),
         prior_1_hour_count=int(counts[1] or 0),
         prior_24_hour_count=int(counts[2] or 0),
+        prior_outgoing_transfer_5_minute_count=(
+            int(counts[3] or 0) if account_role == "sender" else None
+        ),
+        prior_outgoing_transfer_1_hour_count=(
+            int(counts[4] or 0) if account_role == "sender" else None
+        ),
     )
 
 
@@ -277,7 +320,7 @@ def _outgoing_history(
     transaction_created_at: datetime,
     one_hour_ago: datetime,
     one_day_ago: datetime,
-) -> tuple[int, Decimal, Decimal, Decimal, int, int]:
+) -> tuple[int, Decimal, Decimal, Decimal, int, int, int]:
     base = (
         Transaction.sender_account_id == sender_id,
         Transaction.transaction_type == "TRANSFER",
@@ -299,6 +342,21 @@ def _outgoing_history(
             func.sum(case((Transaction.receiver_account_id == receiver_id, 1), else_=0)),
             0,
         ),
+        func.coalesce(
+            func.sum(
+                case(
+                    (
+                        and_(
+                            Transaction.receiver_account_id == receiver_id,
+                            Transaction.created_at >= one_day_ago,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        ),
         func.count(
             distinct(
                 case(
@@ -316,6 +374,7 @@ def _outgoing_history(
         _as_decimal(row[3]),
         int(row[4] or 0),
         int(row[5] or 0),
+        int(row[6] or 0),
     )
 
 
