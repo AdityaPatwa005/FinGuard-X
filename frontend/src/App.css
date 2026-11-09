@@ -12,3 +12,47 @@
 @media(max-width:1150px){.case-work-area{grid-template-columns:minmax(280px,.9fr) minmax(330px,1.1fr)}}
 @media(max-width:900px){.case-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.case-work-area{grid-template-columns:1fr}.case-list{max-height:390px}}
 @media(max-width:650px){.case-demo-strip{align-items:flex-start;font-size:9px;line-height:1.5}.case-metrics{gap:8px}.case-metric{min-height:82px;padding:11px}.case-metric-label{font-size:9px}.case-metric>strong{font-size:20px}.case-queue-heading{padding-inline:11px}.case-filters{padding-inline:10px}.case-filter-row{grid-template-columns:1fr 1fr}.case-filter-row label:last-child{grid-column:1/-1}.case-list-item{padding-inline:11px}.case-list-bottom{gap:6px;flex-wrap:wrap}.case-list-bottom time{margin-left:auto}.case-detail-panel{padding:13px}.case-detail-top h2{font-size:13px}.case-detail-empty{min-height:220px}}
+/* Connected API states and persisted record details. */
+.data-scope-tag{border:1px solid #2a4145;border-radius:3px;padding:4px 6px;color:#86bbb6;font:8px 'DM Mono',monospace;letter-spacing:.45px;white-space:nowrap}
+.api-state{min-height:120px;padding:18px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;color:#8b9ca2;font-size:10px}
+.api-state strong{color:#d4e0e1;font-size:11px}
+.api-state button{border:1px solid #2f6c69;background:#15302f;border-radius:4px;color:#8bd7cf;padding:6px 10px;font-size:9px;cursor:pointer}
+.api-error{border:1px solid #503532;background:#191719;border-radius:4px;margin:10px 0;color:#c9a19c}
+.api-error strong{color:#e19a8c}
+.loading-mark{width:8px;height:8px;border-radius:50%;background:#5dc9bf;box-shadow:0 0 0 4px #183330}
+.api-status-offline .status-dot{background:#c96f68;box-shadow:0 0 0 3px #3a2423}
+.api-status-checking .status-dot{background:#d3ab67;box-shadow:0 0 0 3px #342e21}
+.dashboard-grid .signal-panel{min-height:222px}
+.detection-feed{display:grid;gap:0;margin-top:9px;max-height:280px;overflow:auto}
+.detection-feed-item{padding:9px 0;border-bottom:1px solid #1b2930}
+.detection-feed-item:last-child{border-bottom:0}
+.detection-feed-top{display:flex;align-items:flex-start;justify-content:space-between;gap:9px}
+.detection-feed-top strong{font-size:9px;color:#cbd8da;font-weight:600}
+.detection-feed-item p,.incident-evidence-list article>p{margin:5px 0;color:#819298;font-size:8px;line-height:1.5}
+.detection-feed-item>div:last-child{display:flex;justify-content:space-between;gap:8px;color:#6f8389;font:7px 'DM Mono',monospace}
+.case-severity.elevated,.risk-level.elevated{color:#dfac67;background:#30291f}
+.case-severity.guarded,.risk-level.guarded{color:#87b9c5;background:#1c2d36}
+.case-severity.low,.risk-level.low{color:#83c3ad;background:#1b302b}
+.case-status.dismissed{color:#d1948a;background:#342422}
+.badge.completed{background:#1b302b;color:#83c3ad}
+.badge.pending{background:#30291f;color:#dfac67}
+.badge.failed{background:#342322;color:#e18a7d}
+.muted-cell{color:#71838b;font-size:8px}
+.case-list-item>small{display:block;margin-top:7px;color:#71838b;font:7px 'DM Mono',monospace}
+.section-count{margin-left:4px;color:#73c8c0;font:8px 'DM Mono',monospace}
+.detail-risk-score{margin-left:auto;color:#9ab7b6;font:8px 'DM Mono',monospace}
+.incident-evidence-list{display:grid;gap:9px}
+.incident-evidence-list article{border:1px solid #26363d;background:#101a21;border-radius:4px;padding:9px}
+.incident-evidence-list article>small{display:block;margin-top:5px;color:#6e838a;font:7px 'DM Mono',monospace}
+.evidence-values{list-style:none;margin:7px 0 0;padding:0;display:grid;gap:4px}
+.evidence-values li{color:#a0b0b4;font-size:8px;line-height:1.45}
+.evidence-list>li{align-items:flex-start}
+.evidence-list>li>div{min-width:0}
+.evidence-list>li>div>strong{font-size:9px;color:#cbd8da}
+.evidence-list>li>div>p{margin:4px 0;color:#89999e;font-size:8px;line-height:1.5}
+.note-form select{height:29px;border:1px solid #293a42;border-radius:4px;background:#0b141a;padding:0 8px;color:#d7e2e4;font-size:9px}
+.note-form label span{color:#70828a}
+.status-action-section{border-top:1px solid #1b2930}
+.inline-api-error{margin-top:10px;padding:8px;border:1px solid #503532;border-radius:4px;background:#191719;color:#e19a8c;font-size:9px}
+.case-detail-panel .case-status-line{flex-wrap:wrap}
+@media(max-width:650px){.data-scope-tag{font-size:7px}.case-detail-panel .case-status-line{align-items:flex-start}.detail-risk-score{margin-left:0}.api-state{padding:13px}.case-list-item>small{line-height:1.5}}

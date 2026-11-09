@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -108,3 +109,152 @@ class TransactionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     ledger_entries: list[LedgerEntryResponse]
+
+
+RiskBandValue = Literal["LOW", "GUARDED", "ELEVATED", "CRITICAL"]
+IncidentStatusValue = Literal["OPEN", "INVESTIGATING", "RESOLVED", "DISMISSED"]
+
+
+class RiskDistributionResponse(BaseModel):
+    band: RiskBandValue
+    count: int
+
+
+class DashboardSummaryResponse(BaseModel):
+    period_start: datetime
+    transactions_monitored: int
+    high_risk_transactions: int
+    active_incidents: int
+    open_cases: int
+    critical_cases: int
+    awaiting_review: int
+    resolved_cases: int
+    blocked_transactions: int | None
+    blocked_transactions_note: str
+    triggered_detections: int
+    risk_distribution: list[RiskDistributionResponse]
+    risk_distribution_total: int
+
+
+class DetectionEvidenceResponse(BaseModel):
+    name: str
+    value: str | int | bool
+    unit: str | None = None
+
+
+class DetectionBriefResponse(BaseModel):
+    id: UUID
+    rule_id: str
+    rule_version: str
+    rule_name: str
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    explanation: str
+    evidence: list[DetectionEvidenceResponse]
+    detected_at: datetime
+    incident_id: UUID | None
+
+
+class RecentTransactionResponse(BaseModel):
+    id: UUID
+    transaction_type: Literal["FUNDING", "TRANSFER"]
+    sender_account: str | None
+    receiver_account: str
+    amount: Decimal
+    currency: str
+    status: Literal["PENDING", "COMPLETED", "FAILED"]
+    created_at: datetime
+    risk_score: int | None
+    risk_band: RiskBandValue | None
+    triggered_detection_count: int
+    detections: list[DetectionBriefResponse]
+
+
+class RecentDetectionResponse(DetectionBriefResponse):
+    transaction_amount: Decimal
+    currency: str
+    incident_risk_score: int | None
+    incident_risk_band: RiskBandValue | None
+
+
+class IncidentListItemResponse(BaseModel):
+    id: UUID
+    title: str
+    status: IncidentStatusValue
+    risk_score: int
+    risk_band: RiskBandValue
+    risk_explanation: str
+    primary_account: str
+    opened_at: datetime
+    last_activity_at: datetime
+    closed_at: datetime | None
+    transaction_count: int
+    detection_count: int
+
+
+class IncidentListResponse(BaseModel):
+    items: list[IncidentListItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class IncidentTransactionResponse(BaseModel):
+    id: UUID
+    transaction_type: Literal["FUNDING", "TRANSFER"]
+    amount: Decimal
+    currency: str
+    status: Literal["PENDING", "COMPLETED", "FAILED"]
+    created_at: datetime
+
+
+class RuleEvaluationResponse(BaseModel):
+    id: UUID
+    rule_id: str
+    rule_version: str
+    rule_name: str
+    rule_description: str
+    transaction_id: UUID
+    detected_at: datetime
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    outcome: Literal["TRIGGERED", "NOT_TRIGGERED", "NOT_EVALUATED"]
+    explanation: str
+    evidence: list[DetectionEvidenceResponse]
+    limitation: str | None
+
+
+class IncidentLifecycleResponse(BaseModel):
+    id: UUID
+    from_status: IncidentStatusValue | None
+    to_status: IncidentStatusValue
+    actor_identifier: str | None
+    note: str | None
+    changed_at: datetime
+
+
+class IncidentDetailResponse(IncidentListItemResponse):
+    anchor_transaction_id: UUID
+    risk_policy_version: str
+    risk_evidence: list[dict[str, object]]
+    transactions: list[IncidentTransactionResponse]
+    detections: list[RuleEvaluationResponse]
+    timeline: list[IncidentLifecycleResponse]
+
+
+class IncidentStatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    status: IncidentStatusValue
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class IncidentNoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    note: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("note")
+    @classmethod
+    def note_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Note cannot be blank.")
+        return value.strip()

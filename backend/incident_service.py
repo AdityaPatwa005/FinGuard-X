@@ -1,7 +1,7 @@
 """Account-scoped, idempotent incident correlation and lifecycle transitions."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -184,9 +184,10 @@ def transition_incident(
         elif len(actor_identifier) > 120:
             raise ValueError("Actor identifier cannot exceed 120 characters")
 
+    change_time = changed_at or datetime.now(timezone.utc)
     previous = incident.status
     incident.status = new_status
-    incident.closed_at = changed_at if new_status in CLOSED_INCIDENT_STATUSES else None
+    incident.closed_at = change_time if new_status in CLOSED_INCIDENT_STATUSES else None
     db.add(
         IncidentLifecycleEvent(
             incident_id=incident.id,
@@ -194,7 +195,7 @@ def transition_incident(
             to_status=new_status,
             actor_identifier=actor_identifier,
             note=note,
-            changed_at=changed_at,
+            changed_at=change_time,
         )
     )
     db.flush()
