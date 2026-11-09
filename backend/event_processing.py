@@ -194,7 +194,7 @@ def process_event_batch(
     failed = 0
     for claim in claims:
         try:
-            normalize_transaction_event(
+            normalized = normalize_transaction_event(
                 event_id=claim.event_id,
                 event_type=claim.event_type,
                 event_version=claim.event_version,
@@ -202,6 +202,11 @@ def process_event_batch(
                 related_transaction_id=claim.related_transaction_id,
                 payload=claim.payload,
             )
+            if not _process_claimed_event(session_factory, claim, normalized):
+                # A lease may have expired and been reclaimed while this worker ran.
+                logger.info("Outbox event %s claim was superseded.", claim.event_id)
+                continue
+            processed += 1
         except EventNormalizationError as exc:
             _mark_failed(session_factory, claim, str(exc))
             failed += 1
@@ -214,37 +219,41 @@ def process_event_batch(
                 claim.event_id,
                 type(exc).__name__,
             )
-        else:
-            if _mark_processed(session_factory, claim):
-                processed += 1
-            else:
-                # A lease may have expired and been reclaimed while this worker ran.
-                logger.info("Outbox event %s claim was superseded.", claim.event_id)
-
     return EventBatchResult(claimed=len(claims), processed=processed, failed=failed)
 
 
-def _mark_processed(
-    session_factory: Callable[[], Session], claim: EventClaim
+def _process_claimed_event(
+    session_factory: Callable[[], Session],
+    claim: EventClaim,
+    normalized: NormalizedTransactionEvent,
 ) -> bool:
+    """Persist detections and acknowledge the outbox row atomically."""
     with session_factory() as db:
         with db.begin():
-            result = db.execute(
-                update(OutboxEvent)
+            outbox = db.scalar(
+                select(OutboxEvent)
                 .where(
                     OutboxEvent.id == claim.event_id,
                     OutboxEvent.processing_status == "PROCESSING",
                     OutboxEvent.processing_token == claim.processing_token,
                 )
-                .values(
-                    processing_status="PROCESSED",
-                    processed_at=datetime.now(timezone.utc),
-                    processing_started_at=None,
-                    processing_token=None,
-                    last_error=None,
-                )
+                .with_for_update()
             )
-            return result.rowcount == 1
+            if outbox is None:
+                return False
+
+            # Import at call-time to avoid coupling the reusable normalizer to
+            # the detection layer's event types.
+            from detection_pipeline import persist_transfer_detections
+
+            persist_transfer_detections(db, normalized)
+            outbox.processing_status = "PROCESSED"
+            outbox.processed_at = datetime.now(timezone.utc)
+            outbox.processing_started_at = None
+            outbox.processing_token = None
+            outbox.last_error = None
+            db.flush()
+            return True
 
 
 def _mark_failed(
