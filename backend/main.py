@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 from database import engine, get_db
 from incident_models import IncidentLifecycleEvent, RuleEvaluationRecord, SecurityIncident
 from incident_service import IncidentTransitionError, transition_incident
+from geospatial_models import GeospatialEvent
 from ledger_models import LedgerAccount
 from models import Account, User
 from outbox_models import OutboxEvent
@@ -22,6 +23,10 @@ from schemas import (
     CustomerCreate,
     CustomerResponse,
     DashboardSummaryResponse,
+    GeoEventType,
+    GeoRiskBand,
+    GeospatialEventPage,
+    GeospatialRoutePage,
     FundingRequest,
     IncidentDetailResponse,
     IncidentListResponse,
@@ -728,3 +733,166 @@ def add_incident_note(
         )
         db.flush()
     return _incident_detail(db, incident)
+
+
+def _geospatial_filters(
+    event_type: str | None,
+    risk_band: str | None,
+    incident_id: UUID | None,
+    start_at: datetime | None,
+    end_at: datetime | None,
+):
+    conditions = []
+    if event_type:
+        conditions.append(GeospatialEvent.event_type == event_type)
+    if incident_id:
+        conditions.append(GeospatialEvent.incident_id == incident_id)
+    if start_at:
+        conditions.append(GeospatialEvent.event_at >= start_at)
+    if end_at:
+        conditions.append(GeospatialEvent.event_at <= end_at)
+    if risk_band:
+        conditions.append(SecurityIncident.risk_band == risk_band)
+    return conditions
+
+
+def _geospatial_metadata(event: GeospatialEvent) -> dict:
+    metadata = event.event_metadata or {}
+    return {
+        "synthetic": metadata.get("synthetic") is True,
+        "city": metadata.get("city"),
+        "scenario": metadata.get("scenario"),
+        "label": metadata.get("label"),
+    }
+
+
+@app.get("/geospatial/events", response_model=GeospatialEventPage)
+def list_geospatial_events(
+    event_type: GeoEventType | None = None,
+    risk_band: GeoRiskBand | None = None,
+    incident_id: UUID | None = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    db: Session = Depends(get_db),
+):
+    if start_at and end_at and start_at > end_at:
+        raise HTTPException(status_code=422, detail="start_at must be earlier than or equal to end_at.")
+    conditions = _geospatial_filters(event_type, risk_band, incident_id, start_at, end_at)
+    total = db.scalar(
+        select(func.count(GeospatialEvent.id))
+        .select_from(GeospatialEvent)
+        .outerjoin(SecurityIncident, SecurityIncident.id == GeospatialEvent.incident_id)
+        .where(*conditions)
+    ) or 0
+    rows = db.execute(
+        select(GeospatialEvent, SecurityIncident)
+        .outerjoin(SecurityIncident, SecurityIncident.id == GeospatialEvent.incident_id)
+        .where(*conditions)
+        .order_by(GeospatialEvent.event_at.desc(), GeospatialEvent.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "account_id": event.account_id,
+                "transaction_id": event.transaction_id,
+                "incident_id": event.incident_id,
+                "coordinate": (
+                    {"latitude": event.latitude, "longitude": event.longitude}
+                    if event.latitude is not None and event.longitude is not None else None
+                ),
+                "event_at": event.event_at,
+                "metadata": _geospatial_metadata(event),
+                "incident_risk_band": incident.risk_band if incident else None,
+                "incident_risk_score": incident.risk_score if incident else None,
+            }
+            for event, incident in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/geospatial/routes", response_model=GeospatialRoutePage)
+def list_geospatial_routes(
+    risk_band: GeoRiskBand | None = None,
+    incident_id: UUID | None = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    db: Session = Depends(get_db),
+):
+    if start_at and end_at and start_at > end_at:
+        raise HTTPException(status_code=422, detail="start_at must be earlier than or equal to end_at.")
+    origin = aliased(GeospatialEvent)
+    destination = aliased(GeospatialEvent)
+    conditions = [
+        GeospatialEvent.event_type == "TRANSACTION_ROUTE",
+        origin.event_type == "TRANSACTION_ORIGIN",
+        destination.event_type == "BENEFICIARY_LOCATION",
+    ]
+    if incident_id:
+        conditions.append(GeospatialEvent.incident_id == incident_id)
+    if risk_band:
+        conditions.append(SecurityIncident.risk_band == risk_band)
+    if start_at:
+        conditions.append(GeospatialEvent.event_at >= start_at)
+    if end_at:
+        conditions.append(GeospatialEvent.event_at <= end_at)
+    total = db.scalar(
+        select(func.count(GeospatialEvent.id))
+        .select_from(GeospatialEvent)
+        .join(origin, origin.id == GeospatialEvent.origin_event_id)
+        .join(destination, destination.id == GeospatialEvent.destination_event_id)
+        .join(Transaction, Transaction.id == GeospatialEvent.transaction_id)
+        .outerjoin(SecurityIncident, SecurityIncident.id == GeospatialEvent.incident_id)
+        .where(*conditions)
+    ) or 0
+    rows = db.execute(
+        select(GeospatialEvent, origin, destination, Transaction, SecurityIncident)
+        .select_from(GeospatialEvent)
+        .join(origin, origin.id == GeospatialEvent.origin_event_id)
+        .join(destination, destination.id == GeospatialEvent.destination_event_id)
+        .join(Transaction, Transaction.id == GeospatialEvent.transaction_id)
+        .outerjoin(SecurityIncident, SecurityIncident.id == GeospatialEvent.incident_id)
+        .where(*conditions)
+        .order_by(GeospatialEvent.event_at.desc(), GeospatialEvent.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": route.id,
+                "transaction_id": transaction.id,
+                "incident_id": route.incident_id,
+                "origin_event_id": origin_event.id,
+                "destination_event_id": destination_event.id,
+                "origin": {"latitude": origin_event.latitude, "longitude": origin_event.longitude},
+                "destination": {"latitude": destination_event.latitude, "longitude": destination_event.longitude},
+                "origin_label": (origin_event.event_metadata or {}).get("city"),
+                "destination_label": (destination_event.event_metadata or {}).get("city"),
+                "amount": transaction.amount,
+                "currency": transaction.currency,
+                "transaction_status": transaction.status,
+                "transaction_type": transaction.transaction_type,
+                "event_at": route.event_at,
+                "synthetic": (route.event_metadata or {}).get("synthetic") is True,
+                "scenario": (route.event_metadata or {}).get("scenario"),
+                "incident_status": incident.status if incident else None,
+                "incident_risk_band": incident.risk_band if incident else None,
+                "incident_risk_score": incident.risk_score if incident else None,
+            }
+            for route, origin_event, destination_event, transaction, incident in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }

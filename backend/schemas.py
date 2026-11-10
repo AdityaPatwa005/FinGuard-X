@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -230,6 +230,73 @@ class OutboxHealthResponse(BaseModel):
     last_processed_at: datetime | None
     status: Literal["HEALTHY", "ATTENTION"]
     note: str
+
+
+GeoEventType = Literal[
+    "LOGIN_LOCATION", "TRANSACTION_ORIGIN", "BENEFICIARY_LOCATION", "TRANSACTION_ROUTE"
+]
+GeoRiskBand = Literal["LOW", "GUARDED", "ELEVATED", "CRITICAL"]
+
+
+class GeoCoordinateResponse(BaseModel):
+    latitude: Decimal = Field(ge=-90, le=90)
+    longitude: Decimal = Field(ge=-180, le=180)
+
+
+class GeoMetadataResponse(BaseModel):
+    synthetic: bool
+    city: str | None = None
+    scenario: str | None = None
+    label: str | None = None
+
+
+class GeospatialEventResponse(BaseModel):
+    id: UUID
+    event_type: GeoEventType
+    account_id: UUID | None
+    transaction_id: UUID | None
+    incident_id: UUID | None
+    coordinate: GeoCoordinateResponse | None
+    event_at: datetime
+    metadata: GeoMetadataResponse
+    incident_risk_band: GeoRiskBand | None = None
+    incident_risk_score: int | None = Field(default=None, ge=0, le=100)
+
+
+class GeospatialEventPage(BaseModel):
+    items: list[GeospatialEventResponse]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=500)
+    offset: int = Field(ge=0)
+
+
+class GeospatialRouteResponse(BaseModel):
+    id: UUID
+    transaction_id: UUID
+    incident_id: UUID | None
+    origin_event_id: UUID
+    destination_event_id: UUID
+    origin: GeoCoordinateResponse
+    destination: GeoCoordinateResponse
+    origin_label: str | None = None
+    destination_label: str | None = None
+    amount: Decimal
+    currency: str
+    transaction_status: Literal["PENDING", "COMPLETED", "FAILED"]
+    transaction_type: Literal["FUNDING", "TRANSFER"]
+    event_at: datetime
+    synthetic: bool
+    scenario: str | None = None
+    incident_status: str | None = None
+    incident_risk_band: GeoRiskBand | None = None
+    incident_risk_score: int | None = Field(default=None, ge=0, le=100)
+
+
+class GeospatialRoutePage(BaseModel):
+    items: list[GeospatialRouteResponse]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=500)
+    offset: int = Field(ge=0)
 
 
 class IncidentListItemResponse(BaseModel):

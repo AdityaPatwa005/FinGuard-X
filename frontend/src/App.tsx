@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { useApiResource } from './useApiResource'
 import LiveMonitoring from './pages/LiveMonitoring'
 import Intelligence from './pages/Intelligence'
-import GeospatialIntelligence from './pages/GeospatialIntelligence'
 import ResponseAudit from './pages/ResponseAudit'
 import './App.css'
+
+const GeospatialIntelligence = lazy(() => import('./pages/GeospatialIntelligence'))
 import {
   apiRequest,
   getApiConfigurationError,
@@ -302,14 +303,14 @@ function App() {
     'Command Center': 'Review persisted simulator transactions, rule detections and incident risk.',
     'Live Monitoring': 'Review recent persisted simulator activity with periodic API refresh.',
     Intelligence: 'Inspect configured detection rules, persisted outcomes and risk evidence.',
-    'Geospatial Intelligence': 'Review location data availability without inferring physical position from transfers.',
+    'Geospatial Intelligence': 'Explore explicitly persisted synthetic location events and transaction connections.',
     'Investigation Center': 'Review correlated incidents, inspect evidence and record auditable analyst notes.',
     'Response & Audit': 'Review outbox processing health and persisted incident and rule audit records.',
   }
   const pageContent = active === 'Command Center' ? <CommandCenter />
     : active === 'Live Monitoring' ? <LiveMonitoring />
       : active === 'Intelligence' ? <Intelligence />
-        : active === 'Geospatial Intelligence' ? <GeospatialIntelligence />
+        : active === 'Geospatial Intelligence' ? <Suspense fallback={<div className="ops-state" role="status"><span className="loading-mark" />Loading geospatial workspace…</div>}><GeospatialIntelligence /></Suspense>
           : active === 'Investigation Center' ? <InvestigationCenter />
             : <ResponseAudit onNavigate={setActive} />
   useEffect(() => {

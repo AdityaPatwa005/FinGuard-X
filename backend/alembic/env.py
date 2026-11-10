@@ -16,6 +16,7 @@ import ledger_models # noqa: E402,F401 - imports all model declarations for meta
 import transaction_models # noqa: E402,F401 - registers transaction and ledger-entry tables
 import outbox_models # noqa: E402,F401 - registers the transactional outbox table
 import incident_models # noqa: E402,F401 - registers detections and incident tables
+import geospatial_models # noqa: E402,F401 - registers synthetic location event table
 from models import Base  # noqa: E402
 
 

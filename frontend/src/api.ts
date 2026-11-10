@@ -151,6 +151,44 @@ export type OutboxHealth = {
   note: string
 }
 
+export type GeoEventType = 'LOGIN_LOCATION' | 'TRANSACTION_ORIGIN' | 'BENEFICIARY_LOCATION' | 'TRANSACTION_ROUTE'
+export type GeoCoordinate = { latitude: string | number; longitude: string | number }
+export type GeoEvent = {
+  id: string
+  event_type: GeoEventType
+  account_id: string | null
+  transaction_id: string | null
+  incident_id: string | null
+  coordinate: GeoCoordinate | null
+  event_at: string
+  metadata: { synthetic: boolean; city: string | null; scenario: string | null; label: string | null }
+  incident_risk_band: RiskBand | null
+  incident_risk_score: number | null
+}
+export type GeoEventPage = { items: GeoEvent[]; total: number; limit: number; offset: number }
+export type GeoRoute = {
+  id: string
+  transaction_id: string
+  incident_id: string | null
+  origin_event_id: string
+  destination_event_id: string
+  origin: GeoCoordinate
+  destination: GeoCoordinate
+  origin_label: string | null
+  destination_label: string | null
+  amount: string
+  currency: string
+  transaction_status: 'PENDING' | 'COMPLETED' | 'FAILED'
+  transaction_type: 'FUNDING' | 'TRANSFER'
+  event_at: string
+  synthetic: boolean
+  scenario: string | null
+  incident_status: IncidentStatus | null
+  incident_risk_band: RiskBand | null
+  incident_risk_score: number | null
+}
+export type GeoRoutePage = { items: GeoRoute[]; total: number; limit: number; offset: number }
+
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, '')
 
 export function getApiConfigurationError() {
