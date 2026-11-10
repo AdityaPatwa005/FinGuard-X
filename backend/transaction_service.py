@@ -26,6 +26,20 @@ class TransactionResult:
     replayed: bool
 
 
+IDEMPOTENCY_CONSTRAINT = "uq_transactions_idempotency_key"
+
+
+def integrity_error_metadata(error: IntegrityError) -> tuple[str, str]:
+    """Return safe PostgreSQL diagnostics without including SQL or parameters."""
+    original = error.orig
+    diagnostic = getattr(original, "diag", None)
+    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    constraint = getattr(diagnostic, "constraint_name", None) or getattr(
+        original, "constraint_name", None
+    )
+    return str(sqlstate or "unknown"), str(constraint or "unknown")
+
+
 def funding_transaction(
     db: Session,
     *,
@@ -86,6 +100,7 @@ def _execute_transaction(
             detail="Amount must be a positive decimal value.",
         )
 
+    operation_phase = "idempotency_lookup"
     try:
         with db.begin():
             existing = _find_transaction(db, idempotency_key)
@@ -99,20 +114,10 @@ def _execute_transaction(
                     description=description,
                 )
 
-            transaction = Transaction(
-                sender_account_id=sender_account_id,
-                receiver_account_id=receiver_account_id,
-                transaction_type=transaction_type,
-                amount=amount,
-                currency="INR",
-                status="PENDING",
-                idempotency_key=idempotency_key,
-                description=description,
-            )
-            db.add(transaction)
-            # Claim the unique idempotency key before any balances are changed.
-            db.flush()
-
+            # Lock and validate referenced rows before inserting Transaction.
+            # Otherwise a missing account raises a raw FK IntegrityError before
+            # the service can return its intended 404 response.
+            operation_phase = "account_lock_and_validation"
             account_ids = [receiver_account_id]
             if sender_account_id is not None:
                 account_ids.append(sender_account_id)
@@ -134,6 +139,7 @@ def _execute_transaction(
             receiver_ledger = customer_ledgers[receiver_account_id]
 
             if transaction_type == "FUNDING":
+                operation_phase = "funding_pool_lock"
                 funding_pool = db.scalar(
                     select(LedgerAccount)
                     .where(
@@ -148,6 +154,31 @@ def _execute_transaction(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail="Funding is temporarily unavailable.",
                     )
+            else:
+                sender = accounts_by_id[sender_account_id]
+                sender_ledger = customer_ledgers[sender_account_id]
+                if sender.balance < amount:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="The sender account has insufficient funds.",
+                    )
+
+            transaction = Transaction(
+                sender_account_id=sender_account_id,
+                receiver_account_id=receiver_account_id,
+                transaction_type=transaction_type,
+                amount=amount,
+                currency="INR",
+                status="PENDING",
+                idempotency_key=idempotency_key,
+                description=description,
+            )
+            db.add(transaction)
+            # Claim the unique idempotency key before changing balances.
+            operation_phase = "transaction_insert"
+            db.flush()
+
+            if transaction_type == "FUNDING":
                 receiver.balance = receiver.balance + amount
                 entries = [
                     LedgerEntry(
@@ -166,13 +197,6 @@ def _execute_transaction(
                     ),
                 ]
             else:
-                sender = accounts_by_id[sender_account_id]
-                sender_ledger = customer_ledgers[sender_account_id]
-                if sender.balance < amount:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="The sender account has insufficient funds.",
-                    )
                 sender.balance = sender.balance - amount
                 receiver.balance = receiver.balance + amount
                 entries = [
@@ -194,34 +218,52 @@ def _execute_transaction(
 
             transaction.ledger_entries.extend(entries)
             transaction.status = "COMPLETED"
+            operation_phase = "ledger_entry_flush"
             db.flush()
             db.refresh(transaction)
             # The outbox insert is part of this transaction: either both the
             # financial operation and its event commit, or neither does.
+            operation_phase = "outbox_event_creation"
             add_transaction_completed_event(db, transaction)
+            operation_phase = "outbox_event_flush"
             db.flush()
             response = TransactionResponse.model_validate(transaction)
+            operation_phase = "commit"
             return TransactionResult(transaction=response, replayed=False)
 
-    except IntegrityError:
+    except IntegrityError as error:
         db.rollback()
-        # Another request may have claimed this key after our initial lookup.
-        try:
-            existing = _find_transaction(db, idempotency_key)
-            if existing is not None:
-                return _replay_or_reject(
-                    existing,
-                    transaction_type=transaction_type,
-                    sender_account_id=sender_account_id,
-                    receiver_account_id=receiver_account_id,
-                    amount=amount,
-                    description=description,
-                )
-        finally:
-            db.rollback()
+        sqlstate, constraint = integrity_error_metadata(error)
+        if constraint == IDEMPOTENCY_CONSTRAINT:
+            # A concurrent request may claim the key after our initial lookup.
+            try:
+                existing = _find_transaction(db, idempotency_key)
+                if existing is not None:
+                    return _replay_or_reject(
+                        existing,
+                        transaction_type=transaction_type,
+                        sender_account_id=sender_account_id,
+                        receiver_account_id=receiver_account_id,
+                        amount=amount,
+                        description=description,
+                    )
+            finally:
+                db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An idempotency conflict occurred. Verify the request key and try again.",
+            ) from None
+
+        logger.error(
+            "Simulator transaction integrity failure: operation=%s phase=%s sqlstate=%s constraint=%s",
+            transaction_type,
+            operation_phase,
+            sqlstate,
+            constraint,
+        )
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The transaction conflicts with an existing request or ledger constraint.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The transaction could not be completed because of a data integrity error.",
         ) from None
     except SQLAlchemyError:
         db.rollback()

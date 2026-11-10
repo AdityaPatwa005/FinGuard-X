@@ -1,11 +1,14 @@
 import unittest
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -13,6 +16,7 @@ from ledger_models import LedgerAccount
 from models import Account, Base, User
 from schemas import FundingRequest, TransferRequest
 from transaction_models import LedgerEntry, Transaction
+import transaction_service
 from transaction_service import (
     account_lock_statement,
     funding_transaction,
@@ -162,6 +166,64 @@ class TransactionServiceTests(unittest.TestCase):
         self.assertEqual(self._balance(self.receiver.id), Decimal("20.00"))
         self.assertIsNone(self._transaction_and_entries("transfer-insufficient-0001")[0])
 
+    def test_missing_sender_is_reported_before_transaction_insert(self):
+        missing_sender_id = uuid.uuid4()
+        with self.Session() as session:
+            with self.assertRaises(HTTPException) as error:
+                transfer_transaction(
+                    session,
+                    sender_account_id=missing_sender_id,
+                    receiver_account_id=self.receiver.id,
+                    amount=Decimal("1.00"),
+                    idempotency_key="transfer-missing-sender-0001",
+                    description=None,
+                )
+
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertIsNone(self._transaction_and_entries("transfer-missing-sender-0001")[0])
+        self.assertEqual(self._balance(self.receiver.id), Decimal("20.00"))
+
+    def test_unexpected_integrity_error_is_logged_safely_and_rolled_back(self):
+        constraint = "outbox_events_transaction_id_fkey"
+        original_error = SimpleNamespace(
+            sqlstate="23503",
+            diag=SimpleNamespace(constraint_name=constraint),
+        )
+        database_error = IntegrityError("statement omitted", {}, original_error)
+        session = self.Session()
+
+        with patch.object(
+            transaction_service,
+            "add_transaction_completed_event",
+            side_effect=database_error,
+        ), self.assertLogs("transaction_service", level="ERROR") as captured:
+            with self.assertRaises(HTTPException) as error:
+                transfer_transaction(
+                    session,
+                    sender_account_id=self.sender.id,
+                    receiver_account_id=self.receiver.id,
+                    amount=Decimal("10.00"),
+                    idempotency_key="transfer-integrity-diagnostic-0001",
+                    description=None,
+                )
+        session.close()
+
+        self.assertEqual(error.exception.status_code, 500)
+        self.assertNotIn("23503", error.exception.detail)
+        self.assertNotIn(constraint, error.exception.detail)
+        log_output = "\n".join(captured.output)
+        self.assertIn("operation=TRANSFER", log_output)
+        self.assertIn("phase=outbox_event_creation", log_output)
+        self.assertIn("sqlstate=23503", log_output)
+        self.assertIn(f"constraint={constraint}", log_output)
+        self.assertNotIn(str(self.sender.id), log_output)
+        self.assertNotIn("transfer-integrity-diagnostic-0001", log_output)
+        self.assertEqual(self._balance(self.sender.id), Decimal("100.00"))
+        self.assertEqual(self._balance(self.receiver.id), Decimal("20.00"))
+        self.assertIsNone(
+            self._transaction_and_entries("transfer-integrity-diagnostic-0001")[0]
+        )
+
     def test_inactive_accounts_are_rejected(self):
         with self.Session() as session:
             with self.assertRaises(HTTPException) as error:
@@ -253,6 +315,69 @@ class TransactionServiceTests(unittest.TestCase):
                 )
         self.assertEqual(error.exception.status_code, 409)
         self.assertEqual(self._balance(self.sender.id), Decimal("90.00"))
+
+    def test_concurrent_idempotency_constraint_replays_matching_request(self):
+        key = "transfer-idempotency-race-0001"
+        with self.Session() as session:
+            original_result = transfer_transaction(
+                session,
+                sender_account_id=self.sender.id,
+                receiver_account_id=self.receiver.id,
+                amount=Decimal("10.00"),
+                idempotency_key=key,
+                description="same request",
+            )
+
+        session = self.Session()
+        postgres_error = IntegrityError(
+            "statement omitted",
+            {},
+            SimpleNamespace(
+                sqlstate="23505",
+                diag=SimpleNamespace(
+                    constraint_name="uq_transactions_idempotency_key"
+                ),
+            ),
+        )
+        original_find = transaction_service._find_transaction
+        lookup_count = 0
+
+        def mimic_concurrent_claim(db, idempotency_key):
+            nonlocal lookup_count
+            lookup_count += 1
+            if lookup_count == 1:
+                return None
+            return original_find(db, idempotency_key)
+
+        def fail_transaction_insert(_session, _flush_context, _instances):
+            if any(
+                isinstance(instance, Transaction)
+                and instance.idempotency_key == key
+                for instance in _session.new
+            ):
+                raise postgres_error
+
+        event.listen(session, "before_flush", fail_transaction_insert)
+        try:
+            with patch.object(
+                transaction_service, "_find_transaction", side_effect=mimic_concurrent_claim
+            ):
+                replay = transfer_transaction(
+                    session,
+                    sender_account_id=self.sender.id,
+                    receiver_account_id=self.receiver.id,
+                    amount=Decimal("10.00"),
+                    idempotency_key=key,
+                    description="same request",
+                )
+        finally:
+            event.remove(session, "before_flush", fail_transaction_insert)
+            session.close()
+
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.transaction.id, original_result.transaction.id)
+        self.assertEqual(self._balance(self.sender.id), Decimal("90.00"))
+        self.assertEqual(self._balance(self.receiver.id), Decimal("30.00"))
 
     def test_failed_ledger_flush_rolls_back_transaction_and_balances(self):
         session = self.Session()
