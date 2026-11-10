@@ -380,6 +380,45 @@ _RULES = (
 )
 
 
+def rule_catalogue(
+    configuration: RuleConfiguration = DEFAULT_RULE_CONFIGURATION,
+) -> tuple[dict[str, object], ...]:
+    """Return the active rule metadata and thresholds for read-only consumers."""
+    thresholds: dict[str, tuple[dict[str, object], ...]] = {
+        "FGX.TRANSFER.RAPID_BURST": (
+            {"name": "minimum_count_including_evaluated", "value": configuration.rapid_burst_minimum_count_5m, "unit": "transfers / 5m"},
+        ),
+        "FGX.TRANSFER.UNUSUAL_AMOUNT": (
+            {"name": "minimum_baseline_transactions", "value": configuration.minimum_baseline_transactions, "unit": "transfers"},
+            {"name": "median_multiplier", "value": str(configuration.unusual_amount_median_multiplier), "unit": "x"},
+            {"name": "minimum_increase", "value": str(configuration.unusual_amount_minimum_increase), "unit": "INR"},
+        ),
+        "FGX.TRANSFER.NEW_BENEFICIARY_CONTEXT": (
+            {"name": "minimum_outgoing_count_including_evaluated", "value": configuration.new_beneficiary_minimum_outgoing_count_1h, "unit": "transfers / 1h"},
+        ),
+        "FGX.TRANSFER.BENEFICIARY_DISTRIBUTION": (
+            {"name": "minimum_distinct_receivers_including_evaluated", "value": configuration.rapid_distribution_minimum_distinct_receivers_24h, "unit": "receivers / 24h"},
+        ),
+        "FGX.TRANSFER.HIGH_OUTGOING_VOLUME": (
+            {"name": "window", "value": configuration.outgoing_volume_window},
+            {"name": "cumulative_amount_threshold", "value": str(configuration.outgoing_volume_threshold), "unit": "INR"},
+        ),
+    }
+    return tuple(
+        {
+            "rule_id": spec.rule_id,
+            "version": spec.version,
+            "name": spec.name,
+            "description": spec.description,
+            "severity": spec.severity.value,
+            "required_features": list(spec.required_features),
+            "minimum_history": spec.minimum_history,
+            "thresholds": list(thresholds.get(spec.rule_id, ())),
+        }
+        for spec in _RULES
+    )
+
+
 def _evaluate_one_rule(
     spec: _RuleSpec,
     features: TransactionFeatureSet,

@@ -105,6 +105,52 @@ export type IncidentDetail = IncidentListItem & {
   }[]
 }
 
+export type RuleThreshold = { name: string; value: string | number; unit: string | null }
+export type RuleCatalogItem = {
+  rule_id: string
+  version: string
+  name: string
+  description: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+  required_features: string[]
+  minimum_history: string
+  thresholds: RuleThreshold[]
+}
+
+export type RuleEvaluation = {
+  id: string
+  rule_id: string
+  rule_version: string
+  rule_name: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+  outcome: 'TRIGGERED' | 'NOT_TRIGGERED' | 'NOT_EVALUATED'
+  explanation: string
+  evidence: DetectionEvidence[]
+  limitation: string | null
+  transaction_id: string
+  transaction_type: 'FUNDING' | 'TRANSFER'
+  transaction_amount: string
+  currency: string
+  detected_at: string
+  incident_id: string | null
+  incident_risk_score: number | null
+  incident_risk_band: RiskBand | null
+}
+
+export type RuleEvaluationPage = { items: RuleEvaluation[]; total: number; limit: number; offset: number }
+
+export type OutboxHealth = {
+  pending_count: number
+  processing_count: number
+  processed_count: number
+  failed_count: number
+  oldest_pending_at: string | null
+  oldest_failed_at: string | null
+  last_processed_at: string | null
+  status: 'HEALTHY' | 'ATTENTION'
+  note: string
+}
+
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, '')
 
 export function getApiConfigurationError() {

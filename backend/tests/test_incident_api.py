@@ -21,18 +21,24 @@ from main import (
     get_incident,
     list_incidents,
     recent_detections,
+    recent_rule_evaluations,
     recent_transactions,
+    get_rule_catalogue,
+    outbox_processing_health,
     update_incident_status,
 )
 from models import Account, Base, User
+from outbox_models import OutboxEvent
 from schemas import (
     DashboardSummaryResponse,
     IncidentDetailResponse,
     IncidentListResponse,
     IncidentNoteRequest,
     IncidentStatusUpdateRequest,
+    OutboxHealthResponse,
     RecentDetectionResponse,
     RecentTransactionResponse,
+    RuleEvaluationListResponse,
 )
 from transaction_models import Transaction
 
@@ -195,6 +201,58 @@ class IncidentApiTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as missing:
                 get_incident(uuid.uuid4(), db)
         self.assertEqual(missing.exception.status_code, 404)
+
+    def test_rule_catalogue_and_evaluation_endpoint_include_not_evaluated(self):
+        with self.Session.begin() as db:
+            db.add(
+                RuleEvaluationRecord(
+                    rule_id="FGX.TEST.INSUFFICIENT_HISTORY",
+                    rule_version="1.0",
+                    rule_name="Insufficient history example",
+                    rule_description="Synthetic outcome for API coverage.",
+                    transaction_id=self.transaction_id,
+                    relevant_account_id=db.get(SecurityIncident, self.incident_id).primary_account_id,
+                    detected_at=datetime.now(timezone.utc),
+                    severity="MEDIUM",
+                    evaluation_outcome="NOT_EVALUATED",
+                    explanation="Rule not evaluated because history was insufficient.",
+                    required_features=["historical_transfer_count"],
+                    minimum_history="five prior transfers",
+                    evidence=[{"name": "history_count", "value": 2, "unit": "transfers"}],
+                    limitation="Insufficient history.",
+                )
+            )
+        catalogue = get_rule_catalogue()
+        self.assertEqual(len(catalogue), 5)
+        self.assertIn("minimum_count_including_evaluated", [item["name"] for item in catalogue[0]["thresholds"]])
+        with self.Session() as db:
+            page = recent_rule_evaluations(outcome="NOT_EVALUATED", rule_id=None, limit=10, offset=0, db=db)
+            result = recent_rule_evaluations(outcome=None, rule_id="FGX.TEST.RAPID_BURST", limit=1, offset=0, db=db)
+        validated = RuleEvaluationListResponse.model_validate(page)
+        self.assertEqual(validated.total, 1)
+        self.assertEqual(validated.items[0].outcome, "NOT_EVALUATED")
+        self.assertEqual(validated.items[0].limitation, "Insufficient history.")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(len(result["items"]), 1)
+
+    def test_outbox_health_returns_counts_without_payload_details(self):
+        with self.Session.begin() as db:
+            db.add(
+                OutboxEvent(
+                    event_type="transaction.transfer.completed",
+                    event_version=1,
+                    source_system="synthetic_api_test",
+                    related_transaction_id=self.transaction_id,
+                    deduplication_key=f"api-health-test:{uuid.uuid4()}",
+                    payload={"secret_should_not_be_returned": "fixture"},
+                )
+            )
+        with self.Session() as db:
+            response = outbox_processing_health(db)
+        validated = OutboxHealthResponse.model_validate(response)
+        self.assertEqual(validated.pending_count, 1)
+        self.assertEqual(validated.status, "HEALTHY")
+        self.assertNotIn("secret_should_not_be_returned", repr(response))
 
 
 if __name__ == "__main__":

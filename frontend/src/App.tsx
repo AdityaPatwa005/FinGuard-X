@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
+import { useApiResource } from './useApiResource'
+import LiveMonitoring from './pages/LiveMonitoring'
+import Intelligence from './pages/Intelligence'
+import GeospatialIntelligence from './pages/GeospatialIntelligence'
+import ResponseAudit from './pages/ResponseAudit'
 import './App.css'
 import {
   apiRequest,
@@ -26,33 +31,6 @@ const navigation = [
   { name: 'Investigation Center', icon: '⌕' },
   { name: 'Response & Audit', icon: '↗' },
 ]
-
-function useApiResource<T>(path: string | null, refreshKey = 0) {
-  const [data, setData] = useState<T | null>(null)
-  const [loading, setLoading] = useState(Boolean(path))
-  const [error, setError] = useState<string | null>(null)
-  const [attempt, setAttempt] = useState(0)
-  useEffect(() => {
-    if (!path) {
-      setData(null)
-      setError(null)
-      setLoading(false)
-      return
-    }
-    const controller = new AbortController()
-    setLoading(true)
-    setError(null)
-    setData(null)
-    apiRequest<T>(path, { signal: controller.signal })
-      .then(result => setData(result))
-      .catch(reason => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Unable to load API data.')
-      })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
-    return () => controller.abort()
-  }, [path, refreshKey, attempt])
-  return { data, loading, error, retry: () => setAttempt(value => value + 1) }
-}
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-GB', {
@@ -156,7 +134,7 @@ function EventsTable({ rows, loading, error, retry, selectedId, onSelect }: {
   const [riskFilter, setRiskFilter] = useState<RiskBand | ''>('')
   const [sortKey, setSortKey] = useState<TransactionSortKey>('time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-  const allRows = rows ?? []
+  const allRows = useMemo(() => rows ?? [], [rows])
   const filtered = useMemo(() => {
     const matches = allRows.filter(row => (!statusFilter || row.status === statusFilter) && (!riskFilter || row.risk_band === riskFilter))
     const multiplier = sortDirection === 'asc' ? 1 : -1
@@ -235,7 +213,6 @@ function IncidentDetail({ incident, onRefresh }: { incident: IncidentDetailRecor
   const [noteDraft, setNoteDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => { setNextStatus(incident.status) }, [incident.id, incident.status])
   const availableStatuses: IncidentStatus[] = incident.status === 'OPEN' ? ['INVESTIGATING', 'RESOLVED', 'DISMISSED']
     : incident.status === 'INVESTIGATING' ? ['RESOLVED', 'DISMISSED'] : []
 
@@ -303,8 +280,6 @@ function InvestigationCenter() {
   const hasFilters = Boolean(query.trim() || riskFilter || statusFilter)
   const clearFilters = () => { setQuery(''); setRiskFilter(''); setStatusFilter('') }
   const refreshDetails = () => { setRefreshKey(value => value + 1); setSummaryRefreshKey(value => value + 1) }
-  useEffect(() => { if (!selectedId && incidents.data?.items.length) setSelectedId(incidents.data.items[0].id) }, [selectedId, incidents.data])
-
   return <div className="case-workspace">
     <div className="case-demo-strip"><span className="demo-icon">i</span><span><strong>Connected incident workspace</strong> Cases, rule evidence and analyst notes are read from or written to the configured backend.</span><span className="demo-tag">PERSISTED DATA</span></div>
     {dashboard.error ? <ErrorState message={dashboard.error} onRetry={dashboard.retry} /> : dashboard.loading && !dashboard.data ? <LoadingState label="Loading incident metrics…" /> : dashboard.data && <section className="case-metrics"><CaseMetric label="Open cases" value={dashboard.data.open_cases} caption="unresolved incidents" tone="teal" /><CaseMetric label="Critical cases" value={dashboard.data.critical_cases} caption="active critical risk band" tone="red" /><CaseMetric label="Awaiting review" value={dashboard.data.awaiting_review} caption="open incidents" tone="amber" /><CaseMetric label="Resolved cases" value={dashboard.data.resolved_cases} caption="resolved incidents" tone="blue" /></section>}
@@ -323,6 +298,20 @@ function App() {
   const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'offline'>('checking')
   const isCommand = active === 'Command Center'
   const isInvestigationCenter = active === 'Investigation Center'
+  const pageDescriptions: Record<string, string> = {
+    'Command Center': 'Review persisted simulator transactions, rule detections and incident risk.',
+    'Live Monitoring': 'Review recent persisted simulator activity with periodic API refresh.',
+    Intelligence: 'Inspect configured detection rules, persisted outcomes and risk evidence.',
+    'Geospatial Intelligence': 'Review location data availability without inferring physical position from transfers.',
+    'Investigation Center': 'Review correlated incidents, inspect evidence and record auditable analyst notes.',
+    'Response & Audit': 'Review outbox processing health and persisted incident and rule audit records.',
+  }
+  const pageContent = active === 'Command Center' ? <CommandCenter />
+    : active === 'Live Monitoring' ? <LiveMonitoring />
+      : active === 'Intelligence' ? <Intelligence />
+        : active === 'Geospatial Intelligence' ? <GeospatialIntelligence />
+          : active === 'Investigation Center' ? <InvestigationCenter />
+            : <ResponseAudit onNavigate={setActive} />
   useEffect(() => {
     const controller = new AbortController()
     apiRequest<{ status: string }>('/health/database', { signal: controller.signal })
@@ -333,9 +322,9 @@ function App() {
   const configurationError = getApiConfigurationError()
   const connectionLabel = configurationError ? 'API URL not configured' : apiStatus === 'connected' ? 'API connected' : apiStatus === 'checking' ? 'Checking API' : 'API unavailable'
   return <div className="app-shell"><Sidebar active={active} onSelect={setActive} /><main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>Workspace</span><i>/</i><strong>{active}</strong></div><div className="header-actions"><label className="search"><span>⌕</span><input placeholder="Search persisted records…" aria-label="Search is available within each list" /><kbd>⌘ K</kbd></label><div className={`system-status api-status-${apiStatus}`}><span className="status-dot" />{connectionLabel}</div></div></header>
-    <div className="content"><div className="page-heading"><div><div className="eyebrow">SECURITY OPERATIONS <span>•</span> {isInvestigationCenter ? 'INCIDENT MANAGEMENT' : 'CONNECTED OVERVIEW'}</div><h1>{active}</h1><p>{isCommand ? 'Review persisted simulator transactions, rule detections and incident risk.' : isInvestigationCenter ? 'Review correlated incidents, inspect evidence and record auditable analyst notes.' : `Explore ${active.toLowerCase()} activity and operational workflows.`}</p></div><div className="heading-right"><div className="updated"><span className={`status-dot api-status-${apiStatus}`} />{connectionLabel}<i>·</i> PostgreSQL-backed API</div><span className="data-scope-tag">SYNTHETIC SOURCE</span></div></div>
-    {configurationError ? <ErrorState message={configurationError} onRetry={() => window.location.reload()} /> : isCommand ? <CommandCenter /> : isInvestigationCenter ? <InvestigationCenter /> : <section className="panel placeholder"><span className="placeholder-icon">⌁</span><h2>{active}</h2><p>This workspace is not part of the current API integration.</p><span className="demo-tag">NOT CONNECTED</span></section>}
-    <footer className="app-footer"><span>FINGUARD X <i>·</i> COMMAND CENTER</span><span>Simulator data <i>·</i> API integration MVP</span></footer></div></main></div>
+    <div className="content"><div className="page-heading"><div><div className="eyebrow">SECURITY OPERATIONS <span>•</span> {isInvestigationCenter ? 'INCIDENT MANAGEMENT' : isCommand ? 'CONNECTED OVERVIEW' : 'OPERATIONS WORKSPACE'}</div><h1>{active}</h1><p>{pageDescriptions[active]}</p></div><div className="heading-right"><div className="updated"><span className={`status-dot api-status-${apiStatus}`} />{connectionLabel}<i>·</i> PostgreSQL-backed API</div><span className="data-scope-tag">SYNTHETIC SOURCE</span></div></div>
+    {configurationError ? <ErrorState message={configurationError} onRetry={() => window.location.reload()} /> : pageContent}
+    <footer className="app-footer"><span>FINGUARD X <i>·</i> SECURITY OPERATIONS</span><span>Synthetic simulator data <i>·</i> PostgreSQL-backed detection pipeline</span></footer></div></main></div>
 }
 
 export default App

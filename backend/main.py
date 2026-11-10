@@ -16,6 +16,8 @@ from incident_models import IncidentLifecycleEvent, RuleEvaluationRecord, Securi
 from incident_service import IncidentTransitionError, transition_incident
 from ledger_models import LedgerAccount
 from models import Account, User
+from outbox_models import OutboxEvent
+from rule_detection import rule_catalogue
 from schemas import (
     CustomerCreate,
     CustomerResponse,
@@ -25,8 +27,11 @@ from schemas import (
     IncidentListResponse,
     IncidentNoteRequest,
     IncidentStatusUpdateRequest,
+    OutboxHealthResponse,
     RecentDetectionResponse,
     RecentTransactionResponse,
+    RuleCatalogItemResponse,
+    RuleEvaluationListResponse,
     TransactionResponse,
     TransferRequest,
 )
@@ -500,6 +505,101 @@ def recent_detections(
         }
         for evaluation, transaction, incident in rows
     ]
+
+
+@app.get("/rules/catalogue", response_model=list[RuleCatalogItemResponse])
+def get_rule_catalogue():
+    """Return active rule definitions and their configured thresholds."""
+    return rule_catalogue()
+
+
+@app.get("/rule-evaluations/recent", response_model=RuleEvaluationListResponse)
+def recent_rule_evaluations(
+    outcome: str | None = Query(default=None, pattern="^(TRIGGERED|NOT_TRIGGERED|NOT_EVALUATED)$"),
+    rule_id: str | None = Query(default=None, min_length=1, max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100000),
+    db: Session = Depends(get_db),
+):
+    """Return persisted rule outcomes, including explicit NOT_EVALUATED rows."""
+    filters = []
+    if outcome:
+        filters.append(RuleEvaluationRecord.evaluation_outcome == outcome)
+    if rule_id:
+        filters.append(RuleEvaluationRecord.rule_id == rule_id)
+    total = db.scalar(
+        select(func.count(RuleEvaluationRecord.id)).where(*filters)
+    ) or 0
+    rows = db.execute(
+        select(RuleEvaluationRecord, Transaction, SecurityIncident)
+        .join(Transaction, Transaction.id == RuleEvaluationRecord.transaction_id)
+        .outerjoin(SecurityIncident, SecurityIncident.id == RuleEvaluationRecord.incident_id)
+        .where(*filters)
+        .order_by(RuleEvaluationRecord.detected_at.desc(), RuleEvaluationRecord.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": evaluation.id,
+                "rule_id": evaluation.rule_id,
+                "rule_version": evaluation.rule_version,
+                "rule_name": evaluation.rule_name,
+                "severity": evaluation.severity,
+                "outcome": evaluation.evaluation_outcome,
+                "explanation": evaluation.explanation,
+                "evidence": _evidence_response(evaluation.evidence),
+                "limitation": evaluation.limitation,
+                "transaction_id": transaction.id,
+                "transaction_type": transaction.transaction_type,
+                "transaction_amount": transaction.amount,
+                "currency": transaction.currency,
+                "detected_at": evaluation.detected_at,
+                "incident_id": evaluation.incident_id,
+                "incident_risk_score": incident.risk_score if incident else None,
+                "incident_risk_band": incident.risk_band if incident else None,
+            }
+            for evaluation, transaction, incident in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/operations/outbox/health", response_model=OutboxHealthResponse)
+def outbox_processing_health(db: Session = Depends(get_db)):
+    """Expose processing counts and timestamps without event payloads/errors."""
+    try:
+        row = db.execute(
+            select(
+                func.coalesce(func.sum(case((OutboxEvent.processing_status == "PENDING", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((OutboxEvent.processing_status == "PROCESSING", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((OutboxEvent.processing_status == "PROCESSED", 1), else_=0)), 0),
+                func.coalesce(func.sum(case((OutboxEvent.processing_status == "FAILED", 1), else_=0)), 0),
+                func.min(case((OutboxEvent.processing_status == "PENDING", OutboxEvent.created_at), else_=None)),
+                func.min(case((OutboxEvent.processing_status == "FAILED", OutboxEvent.created_at), else_=None)),
+                func.max(case((OutboxEvent.processing_status == "PROCESSED", OutboxEvent.processed_at), else_=None)),
+            )
+        ).one()
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Event processing status is temporarily unavailable.",
+        ) from None
+    pending, processing, processed, failed = (int(value or 0) for value in row[:4])
+    return {
+        "pending_count": pending,
+        "processing_count": processing,
+        "processed_count": processed,
+        "failed_count": failed,
+        "oldest_pending_at": row[4],
+        "oldest_failed_at": row[5],
+        "last_processed_at": row[6],
+        "status": "ATTENTION" if failed else "HEALTHY",
+        "note": "Failed events require investigation." if failed else "Counts reflect persisted transactional outbox records; no payloads are exposed.",
+    }
 
 
 @app.get("/incidents", response_model=IncidentListResponse)

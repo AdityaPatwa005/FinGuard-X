@@ -176,6 +176,62 @@ class RecentDetectionResponse(DetectionBriefResponse):
     incident_risk_band: RiskBandValue | None
 
 
+class RuleThresholdResponse(BaseModel):
+    name: str
+    value: str | int
+    unit: str | None = None
+
+
+class RuleCatalogItemResponse(BaseModel):
+    rule_id: str
+    version: str
+    name: str
+    description: str
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    required_features: list[str]
+    minimum_history: str
+    thresholds: list[RuleThresholdResponse]
+
+
+class RuleEvaluationListItemResponse(BaseModel):
+    id: UUID
+    rule_id: str
+    rule_version: str
+    rule_name: str
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    outcome: Literal["TRIGGERED", "NOT_TRIGGERED", "NOT_EVALUATED"]
+    explanation: str
+    evidence: list[DetectionEvidenceResponse]
+    limitation: str | None
+    transaction_id: UUID
+    transaction_type: Literal["FUNDING", "TRANSFER"]
+    transaction_amount: Decimal
+    currency: str
+    detected_at: datetime
+    incident_id: UUID | None
+    incident_risk_score: int | None
+    incident_risk_band: RiskBandValue | None
+
+
+class RuleEvaluationListResponse(BaseModel):
+    items: list[RuleEvaluationListItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class OutboxHealthResponse(BaseModel):
+    pending_count: int
+    processing_count: int
+    processed_count: int
+    failed_count: int
+    oldest_pending_at: datetime | None
+    oldest_failed_at: datetime | None
+    last_processed_at: datetime | None
+    status: Literal["HEALTHY", "ATTENTION"]
+    note: str
+
+
 class IncidentListItemResponse(BaseModel):
     id: UUID
     title: str
